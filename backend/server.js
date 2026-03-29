@@ -8,7 +8,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
+const allowedOrigin = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.replace(/\/+$/, "")
+  : "*";
+app.use(cors({ origin: allowedOrigin }));
 app.use(express.json());
 
 app.use("/api/tasks", taskRoutes);
