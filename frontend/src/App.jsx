@@ -735,7 +735,7 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
   if (isOvernight) {
     const allWindows = [...studyDay.windows, ...carryover.windows];
     if (allWindows.length > 0) {
-      const start = Math.ceil(currentMinutes / 5) * 5;
+      const start = storedStartTime !== null ? storedStartTime : Math.ceil(currentMinutes / 5) * 5;
       const result = fillSlot(start, 3 * 60, allWindows, 0, 10);
       blocks.push(...result.added);
     }
@@ -814,7 +814,11 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
     blocks,
     totalStudyHours: totalStudy,
     endTime: lastBlock.endDisplay,
-    startTime: isOvernight ? formatTimeDisplay(Math.ceil(currentMinutes / 5) * 5) : "2:00 PM",
+    startTime: isOvernight && storedStartTime !== null 
+      ? formatTimeDisplay(storedStartTime) 
+      : isOvernight 
+        ? formatTimeDisplay(Math.ceil(currentMinutes / 5) * 5)
+        : "2:00 PM",
     isLive: isInStudyWindow,
     isOvernight,
     studyDayDate,
