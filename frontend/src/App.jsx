@@ -582,7 +582,8 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
   }
 
   if (!isOvernight) {
-    const allWindows = [...studyDay.windows];
+    // Carryover tasks first, then today's tasks
+    const allWindows = [...carryover.windows, ...studyDay.windows];
     let taskIndex = 0;
 
     if (taskIndex < allWindows.length) {
@@ -897,9 +898,13 @@ export default function App() {
       const data = await fetchTasks(start, end);
       setTasks(data);
       
-      // Always fetch today's tasks for study plan
+      // Always fetch today's and yesterday's tasks for study plan (carryover)
       const today = format(new Date(), "yyyy-MM-dd");
-      const todayData = await fetchTasks(today, today);
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = format(yesterday, "yyyy-MM-dd");
+      
+      const todayData = await fetchTasks(yesterdayStr, today);
       setTodayTasks(todayData);
     } catch (err) {
       showToast("Failed to load tasks", "error");
