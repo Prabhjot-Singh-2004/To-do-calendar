@@ -800,6 +800,7 @@ export default function App() {
   const [view, setView] = useState("week");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [tasks, setTasks] = useState([]);
+  const [todayTasks, setTodayTasks] = useState([]);
   const [editingTask, setEditingTask] = useState(null);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem("darkMode") === "true");
   const [toast, setToast] = useState(null);
@@ -884,6 +885,11 @@ export default function App() {
       const { start, end } = dateRange();
       const data = await fetchTasks(start, end);
       setTasks(data);
+      
+      // Always fetch today's tasks for study plan
+      const today = format(new Date(), "yyyy-MM-dd");
+      const todayData = await fetchTasks(today, today);
+      setTodayTasks(todayData);
     } catch (err) {
       showToast("Failed to load tasks", "error");
     }
@@ -896,12 +902,16 @@ export default function App() {
   const handleAdd = async (title, date, category = "General", notes = "", duration = 1) => {
     const tempId = "temp-" + Date.now();
     const tempTask = { _id: tempId, title, date, category, notes, duration, completed: false };
+    const today = format(new Date(), "yyyy-MM-dd");
     setTasks((prev) => [...prev, tempTask]);
+    if (date === today) setTodayTasks((prev) => [...prev, tempTask]);
     try {
       const task = await createTask(title, date, category, notes, duration);
       setTasks((prev) => prev.map((t) => (t._id === tempId ? task : t)));
+      if (date === today) setTodayTasks((prev) => prev.map((t) => (t._id === tempId ? task : t)));
     } catch (err) {
       setTasks((prev) => prev.filter((t) => t._id !== tempId));
+      if (date === today) setTodayTasks((prev) => prev.filter((t) => t._id !== tempId));
       showToast("Failed to add task. Is the server running?", "error");
     }
   };
@@ -909,20 +919,24 @@ export default function App() {
   const handleToggle = async (task) => {
     const newCompleted = !task.completed;
     setTasks((prev) => prev.map((t) => (t._id === task._id ? { ...t, completed: newCompleted } : t)));
+    setTodayTasks((prev) => prev.map((t) => (t._id === task._id ? { ...t, completed: newCompleted } : t)));
     try {
       await updateTask(task._id, { completed: newCompleted });
     } catch (err) {
       setTasks((prev) => prev.map((t) => (t._id === task._id ? { ...t, completed: !newCompleted } : t)));
+      setTodayTasks((prev) => prev.map((t) => (t._id === task._id ? { ...t, completed: !newCompleted } : t)));
       showToast("Failed to update task", "error");
     }
   };
 
   const handleEditSave = async (id, data) => {
     setTasks((prev) => prev.map((t) => (t._id === id ? { ...t, ...data } : t)));
+    setTodayTasks((prev) => prev.map((t) => (t._id === id ? { ...t, ...data } : t)));
     setEditingTask(null);
     try {
       const updated = await updateTask(id, data);
       setTasks((prev) => prev.map((t) => (t._id === updated._id ? updated : t)));
+      setTodayTasks((prev) => prev.map((t) => (t._id === updated._id ? updated : t)));
     } catch (err) {
       showToast("Failed to save changes", "error");
     }
@@ -931,10 +945,12 @@ export default function App() {
   const handleDelete = async (task) => {
     handleTimerReset(task._id);
     setTasks((prev) => prev.filter((t) => t._id !== task._id));
+    setTodayTasks((prev) => prev.filter((t) => t._id !== task._id));
     try {
       await deleteTask(task._id);
     } catch (err) {
       setTasks((prev) => [...prev, task]);
+      setTodayTasks((prev) => [...prev, task]);
       showToast("Failed to delete task", "error");
     }
   };
@@ -1099,7 +1115,7 @@ export default function App() {
       {/* Body */}
       <main className="flex-1 p-2 sm:p-4 overflow-hidden flex flex-col">
         {/* Study Plan */}
-        <StudyPlan tasks={tasks.filter((t) => t.date === format(new Date(), "yyyy-MM-dd"))} allTasks={tasks} />
+        <StudyPlan tasks={todayTasks} allTasks={[...tasks, ...todayTasks]} />
 
         {view === "week" && (
           <WeekView
