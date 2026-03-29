@@ -471,7 +471,7 @@ function YearView({ currentDate, onMonthClick }) {
   );
 }
 
-function generateStudyPlan(tasks, allTasks) {
+function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
   const now = new Date();
   let currentMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -487,6 +487,163 @@ function generateStudyPlan(tasks, allTasks) {
   } else {
     studyDayDate = format(now, "yyyy-MM-dd");
   }
+
+  const studyDayTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date === studyDayDate);
+  const carryoverTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date < studyDayDate);
+
+  if (studyDayTasks.length === 0 && carryoverTasks.length === 0) return null;
+
+  const MAX_STUDY_HOURS = 8;
+  const blocks = [];
+
+  const MEALS = [
+    { name: "Lunch", start: 16 * 60, end: 17 * 60 },
+    { name: "Dinner", start: 20 * 60 + 30, end: 21 * 60 + 30 },
+  ];
+
+  const splitIntoWindows = (tasks, isCarryover) => {
+    const windows = [];
+    let total = 0;
+    for (const task of tasks) {
+      let remaining = task.duration;
+      while (remaining > 0 && total < MAX_STUDY_HOURS) {
+        const size = remaining > 2.5 ? 2 : Math.min(remaining, MAX_STUDY_HOURS - total);
+        if (size <= 0) break;
+        windows.push({
+          title: task.title, category: task.category, duration: size,
+          taskId: task._id, isCarryover, date: task.date,
+        });
+        total += size;
+        remaining -= size;
+      }
+    }
+    return { windows, total };
+  };
+
+  const carryover = splitIntoWindows(carryoverTasks, true);
+  const studyDay = splitIntoWindows(studyDayTasks, false);
+
+  const isActive = (startMin, endMin) => {
+    if (!isInStudyWindow) return false;
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const norm = (m) => m >= 1440 ? m - 1440 : m;
+    const s = norm(startMin), e = norm(endMin);
+    if (e > s) return nowMin >= s && nowMin < e;
+    return nowMin >= s || nowMin < e;
+  };
+
+  let totalStudy = 0;
+
+  // Fill a slot with tasks and breaks
+  const fillSlot = (slotStart, slotEnd, windows, startIndex, breakDuration) => {
+    let slotTime = slotStart;
+    let idx = startIndex;
+    const added = [];
+
+    while (idx < windows.length && slotTime < slotEnd) {
+      const win = windows[idx];
+      const blockEnd = slotTime + win.duration * 60;
+      if (blockEnd > slotEnd) break;
+
+      added.push({
+        type: "study", title: win.title, category: win.category,
+        duration: win.duration,
+        startDisplay: formatTimeDisplay(slotTime),
+        endDisplay: formatTimeDisplay(blockEnd),
+        taskId: win.taskId,
+        isNow: isActive(slotTime, blockEnd),
+        isCarryover: win.isCarryover, taskDate: win.date,
+      });
+      totalStudy += win.duration;
+      slotTime = blockEnd;
+      idx++;
+
+      if (idx < windows.length && slotTime + breakDuration <= slotEnd) {
+        added.push({
+          type: "break",
+          title: breakDuration >= 20 ? "Short Break" : "Micro Break",
+          duration: breakDuration / 60,
+          startDisplay: formatTimeDisplay(slotTime),
+          endDisplay: formatTimeDisplay(slotTime + breakDuration),
+          isNow: isActive(slotTime, slotTime + breakDuration),
+        });
+        slotTime += breakDuration;
+      }
+    }
+    return { added, nextTime: slotTime, nextIndex: idx };
+  };
+
+  // === OVERNIGHT (12 AM - 3 AM): Finish remaining tasks ===
+  if (isOvernight) {
+    const allWindows = [...studyDay.windows, ...carryover.windows];
+    if (allWindows.length > 0) {
+      // Use stored start time if available, otherwise calculate
+      const start = storedStartTime !== null ? storedStartTime : Math.ceil(currentMinutes / 5) * 5;
+      const result = fillSlot(start, 3 * 60, allWindows, 0, 10);
+      blocks.push(...result.added);
+    }
+  }
+
+  // === AFTERNOON (2 PM - 3 AM): Full schedule ===
+  if (!isOvernight) {
+    const allWindows = [...studyDay.windows];
+    let taskIndex = 0;
+
+    // Slot 1: 2 PM - 4 PM
+    if (taskIndex < allWindows.length) {
+      const r = fillSlot(14 * 60, 16 * 60, allWindows, taskIndex, 15);
+      blocks.push(...r.added);
+      taskIndex = r.nextIndex;
+    }
+
+    // Lunch
+    blocks.push({
+      type: "meal", title: "Lunch", duration: 1,
+      startDisplay: "4:00 PM", endDisplay: "5:00 PM",
+      isNow: isActive(16 * 60, 17 * 60),
+    });
+
+    // Slot 2: 5 PM - 8:30 PM
+    if (taskIndex < allWindows.length) {
+      const r = fillSlot(17 * 60, 20 * 60 + 30, allWindows, taskIndex, 15);
+      blocks.push(...r.added);
+      taskIndex = r.nextIndex;
+    }
+
+    // Dinner
+    blocks.push({
+      type: "meal", title: "Dinner", duration: 1,
+      startDisplay: "8:30 PM", endDisplay: "9:30 PM",
+      isNow: isActive(20 * 60 + 30, 21 * 60 + 30),
+    });
+
+    // Slot 3: 9:30 PM - 3 AM
+    if (taskIndex < allWindows.length) {
+      const r = fillSlot(21 * 60 + 30, 27 * 60, allWindows, taskIndex, 15);
+      blocks.push(...r.added);
+      taskIndex = r.nextIndex;
+    }
+  }
+
+  if (blocks.length === 0) return null;
+
+  const lastBlock = blocks[blocks.length - 1];
+
+  return {
+    blocks,
+    totalStudyHours: totalStudy,
+    endTime: lastBlock.endDisplay,
+    startTime: isOvernight && storedStartTime !== null 
+      ? formatTimeDisplay(storedStartTime) 
+      : isOvernight 
+        ? formatTimeDisplay(Math.ceil(currentMinutes / 5) * 5)
+        : "2:00 PM",
+    isLive: isInStudyWindow,
+    isOvernight,
+    studyDayDate,
+    hasCarryover: carryover.windows.length > 0,
+  };
+}
 
   const studyDayTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date === studyDayDate);
   const carryoverTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date < studyDayDate);
@@ -677,7 +834,24 @@ function formatTimeDisplay(totalMinutes) {
 
 function StudyPlan({ tasks, allTasks }) {
   const [expanded, setExpanded] = useState(false);
-  const plan = generateStudyPlan(tasks, allTasks);
+  const planStartTimeRef = useRef(null);
+  
+  // Get current time info
+  const now = new Date();
+  let currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const isOvernight = currentMinutes < 180;
+  const isAfternoon = currentMinutes >= 14 * 60;
+  
+  // Store the plan start time once when entering overnight session
+  if (isOvernight && planStartTimeRef.current === null) {
+    planStartTimeRef.current = Math.ceil(currentMinutes / 5) * 5;
+  }
+  // Reset when not in overnight
+  if (!isOvernight) {
+    planStartTimeRef.current = null;
+  }
+  
+  const plan = generateStudyPlan(tasks, allTasks, planStartTimeRef.current);
 
   if (!plan) return null;
 
@@ -1009,96 +1183,31 @@ export default function App() {
     <div className="h-screen flex flex-col bg-gray-50 dark:bg-gray-950">
       {/* Header */}
       <header className="flex-shrink-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-6 py-2 sm:py-3 gap-2">
-          {/* Top row on mobile: title + nav */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 sm:gap-4">
-              <h1 className="text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100">StudyTracker</h1>
-              <div className="flex items-center gap-1">
-                <button onClick={() => navigate("prev")} className="p-1 sm:p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </button>
-                <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-200 min-w-[120px] sm:min-w-[180px] text-center">{getTitle()}</span>
-                <button onClick={() => navigate("next")} className="p-1 sm:p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                  </svg>
-                </button>
-              </div>
-              <button onClick={goToToday} className="px-2 sm:px-3 py-1 text-xs sm:text-sm font-medium border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300">
-                Today
+        {/* Row 1: Title + Nav + Theme */}
+        <div className="flex items-center justify-between px-3 sm:px-6 py-2 sm:py-3">
+          <div className="flex items-center gap-2">
+            <h1 className="text-sm sm:text-lg font-bold text-gray-800 dark:text-gray-100">StudyTracker</h1>
+            <div className="flex items-center">
+              <button onClick={() => navigate("prev")} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-200 min-w-[80px] sm:min-w-[180px] text-center truncate px-1">{getTitle()}</span>
+              <button onClick={() => navigate("next")} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                </svg>
               </button>
             </div>
-            {/* Theme toggle on mobile - top right */}
-            <div className="flex sm:hidden items-center gap-1">
-              <button
-                onClick={() => setDarkMode(!darkMode)}
-                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400"
-              >
-                {darkMode ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clipRule="evenodd" />
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
-                  </svg>
-                )}
-              </button>
-              <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
-                {["week", "month", "year"].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setView(v)}
-                    className={`px-2 py-1 text-xs font-medium rounded-md transition ${
-                      view === v ? "bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-100" : "text-gray-500 dark:text-gray-400"
-                    }`}
-                  >
-                    {v.charAt(0).toUpperCase() + v.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <button onClick={goToToday} className="px-2 py-0.5 text-xs font-medium border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300">
+              Today
+            </button>
           </div>
-          {/* Bottom row: search, filters, view toggles */}
-          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-            <div className="relative flex-1 sm:flex-none">
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search..."
-                className="pl-7 pr-3 py-1.5 text-xs sm:text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-400 w-full sm:w-44"
-              />
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 sm:w-4 h-3.5 sm:h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="text-xs sm:text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-1.5 sm:px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 outline-none"
-            >
-              <option value="all">Status</option>
-              <option value="completed">Done</option>
-              <option value="pending">Pending</option>
-            </select>
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="text-xs sm:text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-1.5 sm:px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 outline-none"
-            >
-              <option value="all">Category</option>
-              {CATEGORIES.map((c) => (
-                <option key={c.name} value={c.name}>{c.name}</option>
-              ))}
-            </select>
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setDarkMode(!darkMode)}
-              className="hidden sm:block p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400"
-              title={darkMode ? "Light mode" : "Dark mode"}
+              className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400"
             >
               {darkMode ? (
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
@@ -1110,29 +1219,65 @@ export default function App() {
                 </svg>
               )}
             </button>
-            <div className="hidden sm:flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
-              {["week", "month", "year"].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`px-4 py-1.5 text-sm font-medium rounded-md transition ${
-                    view === v ? "bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-100" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                  }`}
-                >
-                  {v.charAt(0).toUpperCase() + v.slice(1)}
-                </button>
-              ))}
+          </div>
+        </div>
+        {/* Row 2: View toggles + Search + Filters */}
+        <div className="flex items-center gap-2 px-3 sm:px-6 pb-2 overflow-x-auto">
+          <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 flex-shrink-0">
+            {["week", "month", "year"].map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition ${
+                  view === v ? "bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-100" : "text-gray-500 dark:text-gray-400"
+                }`}
+              >
+                {v.charAt(0).toUpperCase() + v.slice(1)}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 flex-1 sm:flex-none">
+            <div className="relative flex-1 sm:w-40">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search..."
+                className="pl-6 pr-2 py-1 text-xs border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-400 w-full"
+              />
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+              </svg>
             </div>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="text-xs border border-gray-200 dark:border-gray-700 rounded px-1 py-1 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 outline-none flex-shrink-0"
+            >
+              <option value="all">Status</option>
+              <option value="completed">Done</option>
+              <option value="pending">Pending</option>
+            </select>
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="text-xs border border-gray-200 dark:border-gray-700 rounded px-1 py-1 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 outline-none flex-shrink-0"
+            >
+              <option value="all">Cat</option>
+              {CATEGORIES.map((c) => (
+                <option key={c.name} value={c.name}>{c.name.split(" ")[0]}</option>
+              ))}
+            </select>
           </div>
         </div>
         {/* Progress bar */}
         {view === "week" && totalCount > 0 && (
-          <div className="px-3 sm:px-6 pb-2 flex items-center gap-2 sm:gap-3">
-            <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">{completedCount}/{totalCount}</span>
-            <div className="flex-1 h-1.5 sm:h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+          <div className="px-3 sm:px-6 pb-2 flex items-center gap-2">
+            <span className="text-xs text-gray-500 dark:text-gray-400">{completedCount}/{totalCount}</span>
+            <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
               <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${progressPercent}%` }} />
             </div>
-            <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">{progressPercent}%</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{progressPercent}%</span>
           </div>
         )}
       </header>
