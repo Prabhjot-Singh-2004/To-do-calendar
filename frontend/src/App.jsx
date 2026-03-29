@@ -488,8 +488,8 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
     studyDayDate = format(now, "yyyy-MM-dd");
   }
 
-  const studyDayTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date === studyDayDate);
-  const carryoverTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date < studyDayDate);
+  const studyDayTasks = allTasks.filter((t) => !t.completed && (t.duration || 1) > 0 && t.date === studyDayDate);
+  const carryoverTasks = allTasks.filter((t) => !t.completed && (t.duration || 1) > 0 && t.date < studyDayDate);
 
   if (studyDayTasks.length === 0 && carryoverTasks.length === 0) return null;
 
@@ -505,7 +505,7 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
     const windows = [];
     let total = 0;
     for (const task of tasks) {
-      let remaining = task.duration;
+      let remaining = task.duration || 1;
       while (remaining > 0 && total < MAX_STUDY_HOURS) {
         const size = remaining > 2.5 ? 2 : Math.min(remaining, MAX_STUDY_HOURS - total);
         if (size <= 0) break;
@@ -667,7 +667,18 @@ function StudyPlan({ tasks, allTasks }) {
   
   const plan = generateStudyPlan(tasks, allTasks, planStartTimeRef.current);
 
-  if (!plan) return null;
+  if (!plan) {
+    return (
+      <div className="mx-2 sm:mx-4 mb-2 sm:mb-3 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+          </svg>
+          <span>No study plan - add tasks with hours to see your schedule</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-2 sm:mx-4 mb-2 sm:mb-3 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/40 dark:to-indigo-950/40 rounded-lg border border-blue-200 dark:border-blue-800 overflow-hidden">
