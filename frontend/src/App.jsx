@@ -534,7 +534,6 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
 
   let totalStudy = 0;
 
-  // Fill a slot with tasks and breaks
   const fillSlot = (slotStart, slotEnd, windows, startIndex, breakDuration) => {
     let slotTime = slotStart;
     let idx = startIndex;
@@ -573,165 +572,6 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
     return { added, nextTime: slotTime, nextIndex: idx };
   };
 
-  // === OVERNIGHT (12 AM - 3 AM): Finish remaining tasks ===
-  if (isOvernight) {
-    const allWindows = [...studyDay.windows, ...carryover.windows];
-    if (allWindows.length > 0) {
-      // Use stored start time if available, otherwise calculate
-      const start = storedStartTime !== null ? storedStartTime : Math.ceil(currentMinutes / 5) * 5;
-      const result = fillSlot(start, 3 * 60, allWindows, 0, 10);
-      blocks.push(...result.added);
-    }
-  }
-
-  // === AFTERNOON (2 PM - 3 AM): Full schedule ===
-  if (!isOvernight) {
-    const allWindows = [...studyDay.windows];
-    let taskIndex = 0;
-
-    // Slot 1: 2 PM - 4 PM
-    if (taskIndex < allWindows.length) {
-      const r = fillSlot(14 * 60, 16 * 60, allWindows, taskIndex, 15);
-      blocks.push(...r.added);
-      taskIndex = r.nextIndex;
-    }
-
-    // Lunch
-    blocks.push({
-      type: "meal", title: "Lunch", duration: 1,
-      startDisplay: "4:00 PM", endDisplay: "5:00 PM",
-      isNow: isActive(16 * 60, 17 * 60),
-    });
-
-    // Slot 2: 5 PM - 8:30 PM
-    if (taskIndex < allWindows.length) {
-      const r = fillSlot(17 * 60, 20 * 60 + 30, allWindows, taskIndex, 15);
-      blocks.push(...r.added);
-      taskIndex = r.nextIndex;
-    }
-
-    // Dinner
-    blocks.push({
-      type: "meal", title: "Dinner", duration: 1,
-      startDisplay: "8:30 PM", endDisplay: "9:30 PM",
-      isNow: isActive(20 * 60 + 30, 21 * 60 + 30),
-    });
-
-    // Slot 3: 9:30 PM - 3 AM
-    if (taskIndex < allWindows.length) {
-      const r = fillSlot(21 * 60 + 30, 27 * 60, allWindows, taskIndex, 15);
-      blocks.push(...r.added);
-      taskIndex = r.nextIndex;
-    }
-  }
-
-  if (blocks.length === 0) return null;
-
-  const lastBlock = blocks[blocks.length - 1];
-
-  return {
-    blocks,
-    totalStudyHours: totalStudy,
-    endTime: lastBlock.endDisplay,
-    startTime: isOvernight && storedStartTime !== null 
-      ? formatTimeDisplay(storedStartTime) 
-      : isOvernight 
-        ? formatTimeDisplay(Math.ceil(currentMinutes / 5) * 5)
-        : "2:00 PM",
-    isLive: isInStudyWindow,
-    isOvernight,
-    studyDayDate,
-    hasCarryover: carryover.windows.length > 0,
-  };
-}
-
-  const studyDayTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date === studyDayDate);
-  const carryoverTasks = allTasks.filter((t) => !t.completed && t.duration > 0 && t.date < studyDayDate);
-
-  if (studyDayTasks.length === 0 && carryoverTasks.length === 0) return null;
-
-  const MAX_STUDY_HOURS = 8;
-  const blocks = [];
-
-  const MEALS = [
-    { name: "Lunch", start: 16 * 60, end: 17 * 60 },
-    { name: "Dinner", start: 20 * 60 + 30, end: 21 * 60 + 30 },
-  ];
-
-  const splitIntoWindows = (tasks, isCarryover) => {
-    const windows = [];
-    let total = 0;
-    for (const task of tasks) {
-      let remaining = task.duration;
-      while (remaining > 0 && total < MAX_STUDY_HOURS) {
-        const size = remaining > 2.5 ? 2 : Math.min(remaining, MAX_STUDY_HOURS - total);
-        if (size <= 0) break;
-        windows.push({
-          title: task.title, category: task.category, duration: size,
-          taskId: task._id, isCarryover, date: task.date,
-        });
-        total += size;
-        remaining -= size;
-      }
-    }
-    return { windows, total };
-  };
-
-  const carryover = splitIntoWindows(carryoverTasks, true);
-  const studyDay = splitIntoWindows(studyDayTasks, false);
-
-  const isActive = (startMin, endMin) => {
-    if (!isInStudyWindow) return false;
-    const nowMin = now.getHours() * 60 + now.getMinutes();
-    const norm = (m) => m >= 1440 ? m - 1440 : m;
-    const s = norm(startMin), e = norm(endMin);
-    if (e > s) return nowMin >= s && nowMin < e;
-    return nowMin >= s || nowMin < e;
-  };
-
-  let totalStudy = 0;
-
-  // Fill a slot with tasks and breaks, returns next available time
-  const fillSlot = (slotStart, slotEnd, windows, startIndex, breakDuration) => {
-    let slotTime = slotStart;
-    let idx = startIndex;
-    const added = [];
-
-    while (idx < windows.length && slotTime < slotEnd) {
-      const win = windows[idx];
-      const blockEnd = slotTime + win.duration * 60;
-      if (blockEnd > slotEnd) break;
-
-      added.push({
-        type: "study", title: win.title, category: win.category,
-        duration: win.duration,
-        startDisplay: formatTimeDisplay(slotTime),
-        endDisplay: formatTimeDisplay(blockEnd),
-        taskId: win.taskId,
-        isNow: isActive(slotTime, blockEnd),
-        isCarryover: win.isCarryover, taskDate: win.date,
-      });
-      totalStudy += win.duration;
-      slotTime = blockEnd;
-      idx++;
-
-      // Add break if more tasks remain and space exists
-      if (idx < windows.length && slotTime + breakDuration <= slotEnd) {
-        added.push({
-          type: "break",
-          title: breakDuration >= 20 ? "Short Break" : "Micro Break",
-          duration: breakDuration / 60,
-          startDisplay: formatTimeDisplay(slotTime),
-          endDisplay: formatTimeDisplay(slotTime + breakDuration),
-          isNow: isActive(slotTime, slotTime + breakDuration),
-        });
-        slotTime += breakDuration;
-      }
-    }
-    return { added, nextTime: slotTime, nextIndex: idx };
-  };
-
-  // === OVERNIGHT (12 AM - 3 AM): Finish remaining study day tasks ===
   if (isOvernight) {
     const allWindows = [...studyDay.windows, ...carryover.windows];
     if (allWindows.length > 0) {
@@ -741,68 +581,38 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
     }
   }
 
-  // === AFTERNOON (2 PM - 3 AM): Full schedule ===
   if (!isOvernight) {
     const allWindows = [...studyDay.windows];
     let taskIndex = 0;
 
-    // Slot 1: 2 PM - 4 PM (120 min)
     if (taskIndex < allWindows.length) {
       const r = fillSlot(14 * 60, 16 * 60, allWindows, taskIndex, 15);
       blocks.push(...r.added);
       taskIndex = r.nextIndex;
-      // If slot is full of tasks, remaining time is just gap before lunch
     }
 
-    // Lunch: 4 PM - 5 PM
     blocks.push({
       type: "meal", title: "Lunch", duration: 1,
       startDisplay: "4:00 PM", endDisplay: "5:00 PM",
       isNow: isActive(16 * 60, 17 * 60),
     });
 
-    // Slot 2: 5 PM - 8:30 PM (210 min)
     if (taskIndex < allWindows.length) {
       const r = fillSlot(17 * 60, 20 * 60 + 30, allWindows, taskIndex, 15);
       blocks.push(...r.added);
       taskIndex = r.nextIndex;
     }
 
-    // Dinner: 8:30 PM - 9:30 PM
     blocks.push({
       type: "meal", title: "Dinner", duration: 1,
       startDisplay: "8:30 PM", endDisplay: "9:30 PM",
       isNow: isActive(20 * 60 + 30, 21 * 60 + 30),
     });
 
-    // Slot 3: 9:30 PM - 3 AM (330 min)
     if (taskIndex < allWindows.length) {
       const r = fillSlot(21 * 60 + 30, 27 * 60, allWindows, taskIndex, 15);
       blocks.push(...r.added);
       taskIndex = r.nextIndex;
-    }
-
-    // Remaining carryover tasks after study day tasks
-    if (taskIndex >= allWindows.length && carryover.windows.length > 0) {
-      // Add carryover after all study day tasks
-      let lastEnd = 21 * 60 + 30;
-      for (const b of blocks) {
-        if (b.endDisplay) {
-          const parts = b.endDisplay.match(/(\d+):(\d+)\s*(AM|PM)/);
-          if (parts) {
-            let h = parseInt(parts[1]);
-            const m = parseInt(parts[2]);
-            if (parts[3] === "PM" && h !== 12) h += 12;
-            if (parts[3] === "AM" && h === 12) h = 0;
-            const total = h * 60 + m;
-            if (total > lastEnd || (total < 180 && lastEnd >= 180)) lastEnd = total >= 180 ? total : total + 1440;
-          }
-        }
-      }
-      if (lastEnd < 27 * 60) {
-        const r = fillSlot(lastEnd, 27 * 60, carryover.windows, 0, 10);
-        blocks.push(...r.added);
-      }
     }
   }
 
