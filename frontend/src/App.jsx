@@ -488,8 +488,8 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
     studyDayDate = format(now, "yyyy-MM-dd");
   }
 
-  const studyDayTasks = allTasks.filter((t) => !t.completed && (t.duration || 1) > 0 && t.date === studyDayDate);
-  const carryoverTasks = allTasks.filter((t) => !t.completed && (t.duration || 1) > 0 && t.date < studyDayDate);
+  const studyDayTasks = allTasks.filter((t) => (t.duration || 1) > 0 && t.date === studyDayDate);
+  const carryoverTasks = allTasks.filter((t) => (t.duration || 1) > 0 && t.date < studyDayDate);
 
   if (studyDayTasks.length === 0 && carryoverTasks.length === 0) return null;
 
@@ -511,7 +511,7 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
         if (size <= 0) break;
         windows.push({
           title: task.title, category: task.category, duration: size,
-          taskId: task._id, isCarryover, date: task.date,
+          taskId: task._id, isCarryover, date: task.date, isCompleted: task.completed,
         });
         total += size;
         remaining -= size;
@@ -552,8 +552,9 @@ function generateStudyPlan(tasks, allTasks, storedStartTime = null) {
         taskId: win.taskId,
         isNow: isActive(slotTime, blockEnd),
         isCarryover: win.isCarryover, taskDate: win.date,
+        isCompleted: win.isCompleted,
       });
-      totalStudy += win.duration;
+      if (!win.isCompleted) totalStudy += win.duration;
       slotTime = blockEnd;
       idx++;
 
@@ -764,9 +765,14 @@ function StudyPlan({ tasks, allTasks }) {
                   <div className={`text-sm font-medium flex items-center gap-2 ${
                     block.type === "meal" ? "text-amber-700 dark:text-amber-300" :
                     block.type === "break" ? "text-green-700 dark:text-green-300" : 
-                    "text-gray-800 dark:text-gray-200"
+                    block.isCompleted ? "line-through text-gray-400 dark:text-gray-500" : "text-gray-800 dark:text-gray-200"
                   }`}>
                     {block.title}
+                    {block.isCompleted && (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    )}
                     {block.isNow && (
                       <span className="text-xs bg-green-500 text-white px-1.5 py-0.5 rounded animate-pulse">NOW</span>
                     )}
